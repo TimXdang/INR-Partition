@@ -21,6 +21,9 @@ from utils.metrics import calc_psnr, calculate_ssim
 import time
 import argparse
 
+import os
+import imageio
+
 
 
 def lin2img(tensor, width, height):
@@ -49,7 +52,7 @@ def get_mgrid(height, width, dim=2):
 class ImageFitting_color(Dataset):
     def __init__(self, img):
         super().__init__()
-        self.pixels = img.view(-1, 3)
+        self.pixels = img.view(-1, 1)
         self.coords = get_mgrid(height=img.shape[0], width=img.shape[1], dim=2)
 
     def __len__(self):
@@ -94,7 +97,10 @@ def train(model,total_steps,steps_til_summary, dataloader,height=120,width=160,l
             # ssim = calculate_ssim(model_output, ground_truth)
 
             fig, axes = plt.subplots(1, 1, figsize=(6, 6))
-            plot_sample_image(model_output, ax=axes, width=width, height=height)
+            img = lin2img(model_output,width,height)[0].detach().cpu().numpy()
+            img = (np.clip(img, 0., 1.)*255).astype(np.uint8)
+            imageio.imwrite(os.path.join(log_save_path, f'step_{step:04d}.png'), img)
+            #plot_sample_image(model_output, ax=axes, width=width, height=height)
 
             plt.show()
 
@@ -158,11 +164,11 @@ if __name__ == '__main__':
     width = img1.shape[1]
     plt.imshow(img1)
     plt.show()
-
+    
     if mask == 'hfs4':
         segment1 = hfs_domain_decompostion(cv2.imread(img_path), patch_num=4).astype(np.int_)
     elif mask == 'hfs9':
-        segment1 = hfs_domain_decompostion(cv2.imread(img_path),patch_num=9).astype(np.int_)
+        segment1 = hfs_domain_decompostion(cv2.imread(img_path, cv2.IMREAD_GRAYSCALE),patch_num=9).astype(np.int_)
 
     elif mask == '4interval':
         segment1, _ = grid_mask(height, width, grid_num=2)
@@ -189,18 +195,18 @@ if __name__ == '__main__':
 
 
     if architecture == 'multi-Siren':
-        model = multi_MLP(n_heads=n_heads, type='siren', segment_weight=segment1,in_features=2, out_features=3,
+        model = multi_MLP(n_heads=n_heads, type='siren', segment_weight=segment1,in_features=2, out_features=1,
                           hidden_features=hidden_features, hidden_layers=hidden_layers)
     elif architecture == 'multi-relu':
-        model = multi_MLP(n_heads=n_heads, type='relu_mlp', segment_weight=segment1, in_features=2, out_features=3,
+        model = multi_MLP(n_heads=n_heads, type='relu_mlp', segment_weight=segment1, in_features=2, out_features=1,
                           hidden_features=hidden_features,hidden_layers=hidden_layers)
 
     elif architecture == 'Siren':
-        model = Siren(in_features=2, out_features=3, hidden_features=hidden_features, hidden_layers=hidden_layers,
+        model = Siren(in_features=2, out_features=1, hidden_features=hidden_features, hidden_layers=hidden_layers,
               outermost_linear=True, first_omega_0=60, hidden_omega_0=30)
         mask = ''
     elif architecture =='relu-mlp':
-        model = relu_MLP(in_features=2, out_features=3, num_hidden_layers=hidden_layers,
+        model = relu_MLP(in_features=2, out_features=1, num_hidden_layers=hidden_layers,
                                            hidden_features=hidden_features, outermost_linear=True, position_embedding=True)
         mask = ''
 

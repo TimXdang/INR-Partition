@@ -8,17 +8,69 @@ from masks.hfs_segment_plus import hfs_domain_decompostion
 from masks.inteval_segment import grid_mask
 
 from torchvision import transforms
-from util import *
+from MAML_fit.util import *
+
+from torch.utils.data import DataLoader, Dataset
+import os
+import torch
+import imageio
+import numpy as np
+from PIL import Image
+
+
+class ImageFolderDataset(torch.utils.data.Dataset):
+
+    __support_formats__ = ['.jpg', '.jpeg', '.png', '.gif', '.bmp'] 
+
+    def __init__(self, root):
+        super().__init__()
+
+        if not root.endswith('.npy'):
+            images = []
+            for filename in sorted(os.listdir(root)):
+                _, suffix = os.path.splitext(filename)
+                if suffix.lower() not in self.__support_formats__:
+                    continue
+                img = imageio.imread(os.path.join(root, filename)) # [H, W]
+                img = img.astype(np.float32) / 255.
+                if img.ndim == 2:
+                    img = img[..., None] # [H, W] -> [H, W, 1]
+                img = torch.from_numpy(img) # [H, W, C]
+                images.append(img)
+            self.images = torch.stack(images, dim=0) # [N, H, W, C]
+        else:
+            images = np.load(root)
+            if img.ndim == 3:
+                img = img[..., None] # [N, H, W] -> [N, H, W, 1]
+            self.images = torch.from_numpy(images) # [N, H, W, C]
+
+    @property
+    def num_images(self):
+        return self.images.shape[0]
+
+    @property
+    def num_channels(self):
+        return self.images.shape[-1]
+
+    @property
+    def image_size(self):
+        return tuple(self.images.shape[1:3])
+
+    def __len__(self):
+        return self.num_images
+
+    def __getitem__(self, idx):
+        return self.images[idx], torch.tensor(idx, dtype=torch.int64)
+    
 
 class LSUN_mask():
-    def __init__(self, size=256, root='./', classes='church_outdoor_train',
+    def __init__(self, size=240, root='./', classes='church_outdoor_train',
                  n_subdomain=4, mask_method='grid'):
         self.transform = transforms.Compose([
             transforms.CenterCrop(size),
         ])
 
-        self.dataset = torchvision.datasets.LSUN(root=root, classes=[classes],
-                                                 transform=self.transform)
+        self.dataset = ImageFolderDataset(root=root)
         self.meshgrid = get_mgrid(sidelen=size)
         self.n_subdomain = n_subdomain
         self.mask_method = mask_method
@@ -29,7 +81,8 @@ class LSUN_mask():
 
     def __getitem__(self, item):
         img, _ = self.dataset[item]
-        img_numpy = np.array(img)
+        img_numpy = np.array(img).repeat(3, axis=-1)
+        
         if self.mask_method == 'hfs':
             mask = hfs_domain_decompostion(img_numpy, patch_num=self.n_subdomain)
         elif self.mask_method == 'grid':
@@ -40,7 +93,7 @@ class LSUN_mask():
             print('no implement')
         img = transforms.ToTensor()(img_numpy)
 
-        img_flat = img.permute(1, 2, 0).view(-1, 3)
+        img_flat = img.permute(1, 2, 0)[...,0].view(-1, 1)
         if self.mask_method != 'None':
             mask_flat = torch.Tensor(mask.astype(np.int32)).view(-1, 1).long()
             return {'context': {'x': self.meshgrid, 'y': img_flat, 'mask': mask_flat},

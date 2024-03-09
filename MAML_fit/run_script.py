@@ -7,11 +7,20 @@ from LSUN_meta_training import MAML
 from util import *
 from torch.utils.data import DataLoader
 import argparse
+import imageio
+import os
+import numpy as np
+from tqdm import tqdm
 
 
-def MAML_train(meta_model, data, model_name='test'):
+def lin2img(tensor, width, height):
+    batch_size, num_samples, channels = tensor.shape
+    return tensor.view(batch_size, height, width, channels).squeeze(-1)
+
+
+def MAML_train(meta_model, data, model_name='test', optim=None):
     steps_til_summary = 10   # 100
-    optim = torch.optim.Adam(lr=1e-4, params=meta_model.parameters())
+    
     for step, sample in enumerate(data):
         sample = dict_to_gpu(sample)
         model_output = meta_model(sample)
@@ -20,7 +29,7 @@ def MAML_train(meta_model, data, model_name='test'):
         if not step % steps_til_summary:
             print("Step %d, Total loss %0.6f" % (step, loss))
 
-            torch.save(meta_model.state_dict(), './trained_models/'+model_name+'.pt')
+            torch.save(meta_model.state_dict(), '../trained_models/'+model_name+'.pt')
 
         optim.zero_grad()
         loss.backward()
@@ -44,6 +53,11 @@ def evaluate(meta_model, data):
         # the parameters of the model would not be updated.
         totol_psnr.backward()
 
+        imgs = lin2img(model_output['model_out'],240,240).detach().cpu().numpy()
+        for idx, img in enumerate(imgs):
+            img = (np.clip(img, 0., 1.)*255).astype(np.uint8)
+            imageio.imwrite(os.path.join('../res_imgs/', f'step_{step:04d}.png'), img)
+
     print('psnr mean: ', np.mean(psnr_list))
     print('psnr std: ', np.std(psnr_list))
 
@@ -66,7 +80,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    img_siren = Siren(in_features=2, hidden_features=128, hidden_layers=3, out_features=3, outermost_linear=True).cuda()
+    img_siren = Siren(in_features=2, hidden_features=128, hidden_layers=3, out_features=1, outermost_linear=True).cuda()
 
     if args.MAML_partition:
         assert (args.mask == 'grid' or args.mask == 'hfs'), 'must choose a mask method for partition.'
@@ -80,16 +94,24 @@ if __name__ == '__main__':
         meta_model = MAML(num_meta_steps=3, hypo_module=img_siren, loss=l2_loss, init_lr=1e-5,
                           lr_type='per_parameter_per_step').cuda()
 
+    optim = torch.optim.Adam(lr=1e-4, params=meta_model.parameters())
+
     n_subdomain = 4
     if args.mode == 'train':
-        dataset = LSUN_mask(root=args.data_root, classes='church_outdoor_train',
+        dataset = LSUN_mask(root=args.data_root + 'train', classes='church_outdoor_train',
                             n_subdomain=n_subdomain, mask_method=args.mask)
         dataloader = DataLoader(dataset, batch_size=4, num_workers=0)
 
-        MAML_train(meta_model, data=dataloader, model_name=model_name)
+        with tqdm(total=1000) as pbar:
+            pbar.update(0)
+            for current_epoch in range(0, 1001):
+                pbar.set_description(f'EPOCH: {current_epoch}')
+                MAML_train(meta_model, data=dataloader, model_name=model_name, optim=optim)
+                pbar.update()
+
 
     elif args.mode == 'val':
-        dataset = LSUN_mask(root=args.data_root, classes='church_outdoor_val',
+        dataset = LSUN_mask(root=args.data_root + 'test', classes='church_outdoor_val',
                             n_subdomain=n_subdomain, mask_method=args.mask)
         dataloader = DataLoader(dataset, batch_size=1, num_workers=0)
 
